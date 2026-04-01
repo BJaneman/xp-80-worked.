@@ -1,0 +1,232 @@
+name: Windows XP VM with Ngrok
+
+on:
+  workflow_dispatch:
+    inputs:
+      vm_runtime:
+        description: 'VM Runtime (in hours, max 6)'
+        required: true
+        default: '2'
+        type: string
+
+jobs:
+  run-windows-xp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    
+    steps:
+      - name: 📋 Checkout Repository
+        uses: actions/checkout@v4
+        
+      - name: 🖥️ Display System Information
+        run: |
+          echo "=================================="
+          echo "SYSTEM INFORMATION"
+          echo "=================================="
+          echo "Hostname: $(hostname)"
+          echo "OS: $(uname -a)"
+          echo "CPU: $(nproc) cores"
+          echo "Memory: $(free -h | grep Mem | awk '{print $2}')"
+          echo "Disk: $(df -h / | tail -1 | awk '{print $2}')"
+          echo "=================================="
+      
+      - name: ⚙️ Enable KVM Support
+        run: |
+          echo "=================================="
+          echo "ENABLING KVM SUPPORT"
+          echo "=================================="
+          echo "Installing KVM packages..."
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils cpu-checker
+          
+          echo "Checking KVM availability..."
+          sudo kvm-ok || true
+          
+          echo "Setting up KVM permissions..."
+          sudo chmod 666 /dev/kvm
+          sudo usermod -aG kvm $USER
+          sudo usermod -aG libvirt $USER
+          
+          echo "Verifying /dev/kvm..."
+          ls -la /dev/kvm
+          echo "✅ KVM setup complete"
+          echo "=================================="
+      
+      - name: 🐳 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: 🪟 Start Windows XP Container
+        run: |
+          echo "=================================="
+          echo "STARTING WINDOWS XP DOCKER CONTAINER"
+          echo "=================================="
+          echo "Pulling dockur/windows image..."
+          docker pull dockurr/windows:latest
+          
+          echo "Starting Windows XP container..."
+          docker run -d \
+            --name windows-xp \
+            --device=/dev/kvm \
+            --device=/dev/net/tun \
+            --cap-add NET_ADMIN \
+            -e VERSION="xp" \
+            -e RAM_SIZE="2G" \
+            -e CPU_CORES="2" \
+            -e DISK_SIZE="20G" \
+            -e USERNAME="Administrator" \
+            -e PASSWORD="password123" \
+            -p 8006:8006 \
+            -p 3389:3389/tcp \
+            -p 3389:3389/udp \
+            -p 5900:5900 \
+            -v /tmp/windows-storage:/storage \
+            --stop-timeout 120 \
+            dockurr/windows:latest
+          
+          echo "Container started successfully!"
+          echo "Container ID: $(docker ps -q -f name=windows-xp)"
+          echo "=================================="
+      
+      - name: 📊 Monitor Container Startup
+        run: |
+          echo "=================================="
+          echo "MONITORING WINDOWS XP INSTALLATION"
+          echo "=================================="
+          echo "Waiting for container to initialize..."
+          sleep 10
+          
+          echo "Container status:"
+          docker ps -f name=windows-xp
+          
+          echo ""
+          echo "Following container logs (first 60 seconds)..."
+          timeout 60 docker logs -f windows-xp || true
+          
+          echo ""
+          echo "Waiting for Windows XP to boot (this may take 3-5 minutes)..."
+          
+          for i in {1..30}; do
+            echo "[$i/30] Checking status... ($(date '+%H:%M:%S'))"
+            docker logs --tail 20 windows-xp 2>&1 | tail -10
+            echo "---"
+            sleep 10
+          done
+          
+          echo "✅ Initial boot monitoring complete"
+          echo "=================================="
+      
+      - name: 🌐 Install and Configure Ngrok
+        env:
+          NGROK_AUTH_TOKEN: 3BLVtLAew8yyVSC3vKFDo2E4f9Y_4nPhfbQLAbBVrKdqkWCwN
+        run: |
+          echo "=================================="
+          echo "INSTALLING NGROK"
+          echo "=================================="
+          
+          echo "Downloading ngrok..."
+          wget -q https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
+          tar xzf ngrok-v3-stable-linux-amd64.tgz
+          sudo mv ngrok /usr/local/bin/
+          
+          echo "Authenticating ngrok..."
+          ngrok config add-authtoken $NGROK_AUTH_TOKEN
+          
+          echo "✅ Ngrok installed and authenticated"
+          echo "=================================="
+      
+      - name: 🔗 Start Ngrok Tunnels
+        run: |
+          echo "=================================="
+          echo "STARTING NGROK TUNNELS"
+          echo "=================================="
+          
+          echo "Starting ngrok tunnel for web viewer (port 8006)..."
+          nohup ngrok http 8006 --log=stdout > /tmp/ngrok-web.log 2>&1 &
+          NGROK_WEB_PID=$!
+          echo "Ngrok web PID: $NGROK_WEB_PID"
+          
+          echo "Starting ngrok tunnel for RDP (port 3389)..."
+          nohup ngrok tcp 3389 --log=stdout > /tmp/ngrok-rdp.log 2>&1 &
+          NGROK_RDP_PID=$!
+          echo "Ngrok RDP PID: $NGROK_RDP_PID"
+          
+          echo "Waiting for ngrok to initialize..."
+          sleep 10
+          
+          echo "✅ Ngrok tunnels started"
+          echo "=================================="
+      
+      - name: 📡 Display Access Information
+        run: |
+          echo "=================================="
+          echo "🎉 WINDOWS XP VM ACCESS INFORMATION"
+          echo "=================================="
+          echo ""
+          
+          WEB_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[] | select(.proto=="https") | .public_url' | head -1)
+          if [ -z "$WEB_URL" ]; then
+            WEB_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+          fi
+          echo "📱 WEB VIEWER ACCESS (noVNC):"
+          echo "   URL: $WEB_URL"
+          echo "   This opens the web-based viewer directly in your browser"
+          echo ""
+          
+          RDP_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[] | select(.proto=="tcp") | .public_url')
+          RDP_HOST=$(echo $RDP_URL | sed 's/tcp:\/\///')
+          echo "🖥️  RDP ACCESS (Remote Desktop):"
+          echo "   Address: $RDP_HOST"
+          echo "   Username: Administrator"
+          echo "   Password: password123"
+          echo ""
+          
+          echo "📋 HOW TO CONNECT:"
+          echo ""
+          echo "Option 1 - Web Browser (Easiest):"
+          echo "   1. Copy this URL: $WEB_URL"
+          echo "   2. Open it in your web browser"
+          echo "   3. You'll see the Windows XP desktop"
+          echo ""
+          echo "Option 2 - RDP Client (Better Performance):"
+          echo "   1. Open your RDP client (mstsc on Windows, Microsoft Remote Desktop on Mac)"
+          echo "   2. Enter address: $RDP_HOST"
+          echo "   3. Username: Administrator"
+          echo "   4. Password: password123"
+          echo ""
+          
+          echo "=================================="
+          echo "💾 CONTAINER STATUS:"
+          docker ps -f name=windows-xp --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+          echo "=================================="
+          echo ""
+          
+          echo "WEB_URL=$WEB_URL" > /tmp/access-info.txt
+          echo "RDP_HOST=$RDP_HOST" >> /tmp/access-info.txt
+          echo "USERNAME=Administrator" >> /tmp/access-info.txt
+          echo "PASSWORD=password123" >> /tmp/access-info.txt
+          
+          echo "✅ Access information saved"
+      
+      - name: 🔍 Continuous Monitoring and Logging
+        run: |
+          echo "=================================="
+          echo "CONTINUOUS VM MONITORING"
+          echo "=================================="
+          echo "VM will run for ${{ github.event.inputs.vm_runtime }} hours"
+          echo "Monitoring started at: $(date)"
+          echo "=================================="
+          echo ""
+          
+          RUNTIME_SECONDS=$(($(echo "${{ github.event.inputs.vm_runtime }}" | bc | cut -d. -f1) * 3600))
+          END_TIME=$(($(date +%s) + RUNTIME_SECONDS))
+          
+          COUNTER=1
+          while [ $(date +%s) -lt $END_TIME ]; do
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "📊 STATUS UPDATE #$COUNTER - $(date '+%Y-%m-%d %H:%M:%S')"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            
+            REMAINING=$((END_TIME - $(date +%s)))
+            REMAINING_HOURS=$((REMAINING / 3600))
+            REMAINING_MINS=$(((REMAINING % 3600) / 60))
+            echo "⏱️  Time remaining: ${REMAINING_HOURS}h ${REMAINING_MINS}m"
