@@ -35,8 +35,8 @@ jobs:
             --device=/dev/kvm \
             --device=/dev/net/tun \
             --cap-add NET_ADMIN \
-            -e VERSION="xp" \
-            -e RAM_SIZE="2G" \
+            -e VERSION="7u" \
+            -e RAM_SIZE="4G" \
             -e CPU_CORES="2" \
             -e DISK_SIZE="20G" \
             -e USERNAME="Administrator" \
