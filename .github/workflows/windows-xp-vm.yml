@@ -1,4 +1,4 @@
-name: Windows XP VM with Ngrok
+name: Windows XP VM - Quick Access
 
 on:
   workflow_dispatch:
@@ -13,39 +13,23 @@ jobs:
   run-windows-xp:
     runs-on: ubuntu-latest
     timeout-minutes: 360
-    
+
     steps:
       - name: 📋 Checkout Repository
         uses: actions/checkout@v4
-      
-      - name: 🔧 Install Required Packages
+
+      - name: ⚙️ Setup Environment
         run: |
-          echo "Installing required packages..."
+          echo "🔧 Setting up KVM and Docker..."
           sudo apt-get update -qq
-          sudo apt-get install -y -qq \
-            qemu-kvm \
-            libvirt-daemon-system \
-            libvirt-clients \
-            bridge-utils \
-            cpu-checker \
-            jq \
-            bc \
-            curl
-          echo "✅ Packages installed"
-      
-      - name: ⚙️ Enable KVM Support
-        run: |
-          echo "Setting up KVM..."
+          sudo apt-get install -y -qq qemu-kvm libvirt-daemon-system cpu-checker jq bc
           sudo chmod 666 /dev/kvm
-          sudo usermod -aG kvm $USER
-          sudo usermod -aG libvirt $USER
-          ls -la /dev/kvm
           sudo kvm-ok || true
-          echo "✅ KVM ready"
-      
-      - name: 🪟 Start Windows XP Container
+          echo "✅ Environment ready"
+
+      - name: 🪟 Start Windows XP
         run: |
-          echo "Starting Windows XP container..."
+          echo "🚀 Launching Windows XP container..."
           docker run -d \
             --name windows-xp \
             --device=/dev/kvm \
@@ -58,288 +42,154 @@ jobs:
             -e USERNAME="Administrator" \
             -e PASSWORD="password123" \
             -p 8006:8006 \
-            -p 3389:3389/tcp \
-            -p 3389:3389/udp \
-            -v /tmp/windows-storage:/storage \
-            --stop-timeout 120 \
+            -p 3389:3389 \
+            -v /tmp/storage:/storage \
             dockurr/windows:latest
-          
-          echo "Waiting for container to start..."
-          sleep 10
-          
-          echo "Container status:"
+
+          echo "✅ Container started!"
           docker ps -f name=windows-xp
-          
-          echo "✅ Container started"
-      
+
       - name: 🌐 Setup Ngrok
-        env:
-          NGROK_AUTH_TOKEN: 3BLVtLAew8yyVSC3vKFDo2E4f9Y_4nPhfbQLAbBVrKdqkWCwN
         run: |
-          echo "Downloading ngrok..."
+          echo "📥 Installing ngrok..."
           wget -q https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
-          
-          echo "Extracting ngrok..."
           tar xzf ngrok-v3-stable-linux-amd64.tgz
-          
-          echo "Installing ngrok..."
           sudo mv ngrok /usr/local/bin/
-          sudo chmod +x /usr/local/bin/ngrok
-          
-          echo "Configuring ngrok..."
-          ngrok config add-authtoken $NGROK_AUTH_TOKEN
-          
-          echo "✅ Ngrok installed"
-      
-      - name: 🔗 Start Ngrok Tunnels
+
+          # HARDCODED TOKEN
+          ngrok config add-authtoken 3BLVtLAew8yyVSC3vKFDo2E4f9Y_4nPhfbQLAbBVrKdqkWCwN
+
+          echo "🔗 Starting tunnels..."
+          nohup ngrok http 8006 > /dev/null 2>&1 &
+          nohup ngrok tcp 3389 > /dev/null 2>&1 &
+          sleep 8
+          echo "✅ Ngrok ready!"
+
+      - name: ⏳ Wait for Windows to Boot
         run: |
-          echo "Starting ngrok for web viewer..."
-          nohup ngrok http 8006 --log=stdout > /tmp/ngrok-web.log 2>&1 &
-          echo "Web tunnel PID: $!"
-          
-          sleep 3
-          
-          echo "Starting ngrok for RDP..."
-          nohup ngrok tcp 3389 --log=stdout > /tmp/ngrok-rdp.log 2>&1 &
-          echo "RDP tunnel PID: $!"
-          
-          echo "Waiting for ngrok to initialize..."
-          sleep 10
-          
-          echo "✅ Ngrok tunnels started"
-      
-      - name: ⏳ Wait for Windows Boot
-        run: |
-          echo "Waiting for Windows XP to boot..."
-          echo "This takes approximately 2-4 minutes..."
+          echo "⏳ Waiting for Windows XP to boot..."
+          echo "This usually takes 2-4 minutes..."
           echo ""
-          
-          TIMEOUT=300
-          ELAPSED=0
-          BOOTED=false
-          
-          while [ $ELAPSED -lt $TIMEOUT ]; do
+
+          for i in {1..40}; do
             if docker logs windows-xp 2>&1 | grep -q "Windows started successfully"; then
-              echo "✅ Windows XP has booted successfully!"
-              BOOTED=true
+              echo "✅ Windows XP is running!"
               break
             fi
-            
-            if [ $((ELAPSED % 30)) -eq 0 ]; then
-              echo "[$ELAPSED/$TIMEOUT] Booting... (Recent logs:)"
-              docker logs --tail 3 windows-xp 2>&1 | sed 's/^/  /'
-              echo ""
+
+            if [ $((i % 4)) -eq 0 ]; then
+              echo "[$i/40] Still booting ($(($i * 5)) seconds elapsed)..."
+              docker logs --tail 2 windows-xp 2>&1 | sed 's/^/  > /'
             fi
-            
-            sleep 10
-            ELAPSED=$((ELAPSED + 10))
+
+            sleep 5
           done
-          
-          if [ "$BOOTED" = "false" ]; then
-            echo "⚠️ Boot timeout reached. Showing full logs:"
-            docker logs windows-xp 2>&1
-            echo ""
-            echo "Continuing anyway - VM might still be booting..."
-          fi
-          
+
           echo ""
-          echo "Latest container logs:"
-          docker logs --tail 10 windows-xp 2>&1
-      
-      - name: 🎉 DISPLAY ACCESS INFORMATION
+          echo "Latest status:"
+          docker logs --tail 5 windows-xp 2>&1
+
+      - name: 🎉 DISPLAY ACCESS URLS
         run: |
           echo ""
-          echo "╔══════════════════════════════════════════════════════════╗"
-          echo "║                                                          ║"
-          echo "║        🖥️  WINDOWS XP VM - ACCESS INFORMATION 🖥️         ║"
-          echo "║                                                          ║"
-          echo "╚══════════════════════════════════════════════════════════╝"
+          echo "╔════════════════════════════════════════════════╗"
+          echo "║                                                ║"
+          echo "║      🖥️  WINDOWS XP ACCESS INFORMATION 🖥️      ║"
+          echo "║                                                ║"
+          echo "╚════════════════════════════════════════════════╝"
           echo ""
-          
-          sleep 3
-          
-          echo "Fetching ngrok URLs..."
-          
-          # Try multiple times to get URLs
-          for i in {1..5}; do
-            WEB_URL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null | jq -r '.tunnels[]? | select(.proto=="https") | .public_url' 2>/dev/null | head -1)
-            RDP_URL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null | jq -r '.tunnels[]? | select(.proto=="tcp") | .public_url' 2>/dev/null)
-            
-            if [ -n "$WEB_URL" ] && [ -n "$RDP_URL" ]; then
-              break
-            fi
-            
-            echo "Attempt $i/5 - Waiting for ngrok API..."
-            sleep 3
-          done
-          
-          # Fallback if specific protocol not found
-          if [ -z "$WEB_URL" ]; then
-            WEB_URL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null | jq -r '.tunnels[0]?.public_url' 2>/dev/null)
-          fi
-          
-          if [ -z "$RDP_URL" ]; then
-            RDP_URL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null | jq -r '.tunnels[1]?.public_url' 2>/dev/null)
-          fi
-          
-          # Extract RDP host
-          RDP_HOST=$(echo "$RDP_URL" | sed 's|tcp://||')
-          
+
+          sleep 2
+
+          WEB_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[] | select(.proto=="https") | .public_url' | head -1)
+          RDP_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[] | select(.proto=="tcp") | .public_url')
+          RDP_HOST=$(echo $RDP_URL | sed 's/tcp:\/\///')
+
+          echo "🌐 WEB ACCESS (Click to open in browser):"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "🌐 WEB ACCESS (Browser - Easiest Method)"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "    $WEB_URL"
           echo ""
-          if [ -n "$WEB_URL" ] && [ "$WEB_URL" != "null" ]; then
-            echo "    📱 URL: $WEB_URL"
-            echo ""
-            echo "    👉 Just click this URL to access Windows XP in your browser!"
-          else
-            echo "    ⚠️  Web URL not available yet. Check ngrok status below."
-          fi
+          echo "    Just click the URL above to access Windows XP!"
           echo ""
           echo ""
-          
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "🖥️  RDP ACCESS (Remote Desktop - Better Performance)"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          echo "🖥️  RDP ACCESS (For better performance):"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
-          if [ -n "$RDP_HOST" ] && [ "$RDP_HOST" != "null" ]; then
-            echo "    🔌 Server:   $RDP_HOST"
-            echo "    👤 Username: Administrator"
-            echo "    🔑 Password: password123"
-            echo ""
-            echo "    How to connect:"
-            echo "    • Windows: Press Win+R, type 'mstsc', enter server address"
-            echo "    • Mac: Use 'Microsoft Remote Desktop' app"
-            echo "    • Linux: Use 'remmina' or 'freerdp'"
-          else
-            echo "    ⚠️  RDP URL not available yet. Check ngrok status below."
-          fi
+          echo "    Server:   $RDP_HOST"
+          echo "    Username: Administrator"
+          echo "    Password: password123"
+          echo ""
+          echo "    Use any RDP client (Windows: mstsc, Mac: Microsoft Remote Desktop)"
           echo ""
           echo ""
-          
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📊 STATUS INFORMATION"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          echo "💾 Container Info:"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          docker ps -f name=windows-xp --format "Name: {{.Names}}\nStatus: {{.Status}}\nUptime: {{.RunningFor}}"
           echo ""
-          echo "Container Status:"
-          docker ps -f name=windows-xp --format "  Name:   {{.Names}}\n  Status: {{.Status}}\n  Uptime: {{.RunningFor}}"
-          echo ""
-          echo "Ngrok Tunnels:"
-          curl -s http://localhost:4040/api/tunnels 2>/dev/null | jq -r '.tunnels[]? | "  \(.proto)://\(.config.addr) -> \(.public_url)"' 2>/dev/null || echo "  Checking..."
-          echo ""
-          
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo ""
-          
-          # Save URLs
+
           echo "$WEB_URL" > /tmp/web_url.txt
           echo "$RDP_HOST" > /tmp/rdp_host.txt
-          
-          echo "✅ Access information displayed"
-      
-      - name: 🔄 Keep VM Running and Monitor
+
+          echo "╔════════════════════════════════════════════════╗"
+          echo '║  VM will remain active for ${{ github.event.inputs.vm_runtime }} hours          ║'
+          echo "╚════════════════════════════════════════════════╝"
+          echo ""
+
+      - name: 🔍 Keep Alive & Monitor
         run: |
+          echo "🔄 Monitoring started - VM is now accessible!"
+          echo "Press Ctrl+C in GitHub Actions to stop early"
           echo ""
-          echo "╔══════════════════════════════════════════════════════════╗"
-          echo "║  VM is now running and accessible!                       ║"
-          echo "║  Monitoring for ${{ github.event.inputs.vm_runtime }} hour(s)...                                  ║"
-          echo "╚══════════════════════════════════════════════════════════╝"
-          echo ""
-          
-          # Calculate end time
-          HOURS="${{ github.event.inputs.vm_runtime }}"
-          RUNTIME_SECONDS=$(echo "$HOURS * 3600" | bc)
-          END_TIME=$(echo "$(date +%s) + $RUNTIME_SECONDS" | bc)
-          
+
+          RUNTIME_SECONDS=$(($(echo "${{ github.event.inputs.vm_runtime }}" | bc | cut -d. -f1) * 3600))
+          END_TIME=$(($(date +%s) + RUNTIME_SECONDS))
           COUNTER=1
-          
+
           while [ $(date +%s) -lt $END_TIME ]; do
-            # Calculate remaining time
-            REMAINING=$(echo "$END_TIME - $(date +%s)" | bc)
-            REMAINING_HOURS=$(echo "$REMAINING / 3600" | bc)
-            REMAINING_MINS=$(echo "($REMAINING % 3600) / 60" | bc)
-            
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "📊 Status Update #$COUNTER - $(date '+%Y-%m-%d %H:%M:%S')"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "⏱️  Time Remaining: ${REMAINING_HOURS}h ${REMAINING_MINS}m"
-            echo ""
-            
-            # Container status
+            REMAINING=$((END_TIME - $(date +%s)))
+            HOURS=$((REMAINING / 3600))
+            MINS=$(((REMAINING % 3600) / 60))
+
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "📊 Update #$COUNTER - $(date '+%H:%M:%S') - Time left: ${HOURS}h ${MINS}m"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
             if docker ps -f name=windows-xp --format '{{.Status}}' | grep -q 'Up'; then
               echo "✅ Container: Running"
             else
-              echo "❌ Container: Not running!"
+              echo "❌ Container: Stopped!"
             fi
-            
-            # Resource usage
-            echo "💻 Resources:"
-            docker stats windows-xp --no-stream --format "   CPU: {{.CPUPerc}}  |  Memory: {{.MemUsage}}" 2>/dev/null || echo "   Stats unavailable"
-            
-            # Ngrok status
-            echo "🌐 Ngrok:"
-            if curl -s http://localhost:4040/api/tunnels 2>/dev/null | jq -e '.tunnels | length > 0' >/dev/null 2>&1; then
-              echo "   ✅ Tunnels active"
+
+            docker stats windows-xp --no-stream --format "💻 CPU: {{.CPUPerc}} | RAM: {{.MemUsage}}" 2>/dev/null || echo "📊 Stats unavailable"
+
+            if curl -s http://localhost:4040/api/tunnels | jq -e '.tunnels | length > 0' > /dev/null 2>&1; then
+              echo "🌐 Ngrok: Active"
             else
-              echo "   ⚠️  Tunnels not responding"
+              echo "⚠️  Ngrok: Connection issue"
             fi
-            
-            # Show latest logs
-            echo "📝 Recent Logs:"
-            docker logs --tail 3 windows-xp 2>&1 | sed 's/^/   /'
-            
-            # Reshow URLs every 10 updates (10 minutes)
-            if [ $((COUNTER % 10)) -eq 0 ]; then
+
+            if [ $((COUNTER % 15)) -eq 0 ]; then
               echo ""
-              echo "🔗 Access URLs (reminder):"
-              if [ -f /tmp/web_url.txt ]; then
-                echo "   Web: $(cat /tmp/web_url.txt)"
-              fi
-              if [ -f /tmp/rdp_host.txt ]; then
-                echo "   RDP: $(cat /tmp/rdp_host.txt)"
-              fi
+              echo "🔗 Access URLs:"
+              echo "   Web: $(cat /tmp/web_url.txt)"
+              echo "   RDP: $(cat /tmp/rdp_host.txt)"
             fi
-            
+
             echo ""
-            
             COUNTER=$((COUNTER + 1))
             sleep 60
           done
-          
-          echo "⏰ Runtime completed at: $(date)"
-      
+
+          echo "⏰ Runtime completed! Shutting down..."
+
       - name: 🛑 Cleanup
         if: always()
         run: |
-          echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "🧹 CLEANUP"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo ""
-          
-          echo "Final access information:"
-          if [ -f /tmp/web_url.txt ]; then
-            echo "  Web: $(cat /tmp/web_url.txt)"
-          fi
-          if [ -f /tmp/rdp_host.txt ]; then
-            echo "  RDP: $(cat /tmp/rdp_host.txt)"
-          fi
-          echo ""
-          
-          echo "Stopping container..."
+          echo "🧹 Cleaning up..."
           docker stop windows-xp 2>/dev/null || true
-          
-          echo "Removing container..."
           docker rm windows-xp 2>/dev/null || true
-          
-          echo "Stopping ngrok..."
-          pkill ngrok 2>/dev/null || true
-          
-          echo "Cleaning temporary files..."
-          rm -rf /tmp/windows-storage /tmp/ngrok-*.log /tmp/*_url.txt
-          
-          echo ""
+          pkill ngrok || true
           echo "✅ Cleanup complete"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
