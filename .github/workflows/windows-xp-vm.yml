@@ -52,7 +52,14 @@ jobs:
       - name: 🌐 Setup Cloudflare Tunnel (No Token)
         run: |
           echo "📥 Installing cloudflared..."
-          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+
+          wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O cloudflared
+
+          if [ ! -f cloudflared ]; then
+            echo "❌ Download failed!"
+            exit 1
+          fi
+
           chmod +x cloudflared
           sudo mv cloudflared /usr/local/bin/
 
@@ -60,7 +67,7 @@ jobs:
           nohup cloudflared tunnel --url http://localhost:8006 > cf.log 2>&1 &
 
           echo "⏳ Waiting for tunnel URL..."
-          for i in {1..15}; do
+          for i in {1..20}; do
             URL=$(grep -o 'https://[-a-z0-9]*\.trycloudflare.com' cf.log | head -1)
             if [ ! -z "$URL" ]; then
               echo "✅ Tunnel URL acquired!"
@@ -71,7 +78,7 @@ jobs:
           done
 
           echo "🌐 Access URL:"
-          cat /tmp/web_url.txt || echo "❌ Failed to get URL"
+          cat /tmp/web_url.txt || (echo "❌ Failed to get URL" && cat cf.log)
 
       - name: ⏳ Wait for Windows to Boot
         run: |
