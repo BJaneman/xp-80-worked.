@@ -1,4 +1,4 @@
-name: Windows XP VM - Quick Access
+name: Windows XP VM - Quick Access (Cloudflare)
 
 on:
   workflow_dispatch:
@@ -20,9 +20,9 @@ jobs:
 
       - name: ⚙️ Setup Environment
         run: |
-          echo "🔧 Setting up KVM and Docker..."
+          echo "🔧 Setting up KVM..."
           sudo apt-get update -qq
-          sudo apt-get install -y -qq qemu-kvm libvirt-daemon-system cpu-checker jq bc
+          sudo apt-get install -y -qq qemu-kvm libvirt-daemon-system cpu-checker jq bc curl wget
           sudo chmod 666 /dev/kvm
           sudo kvm-ok || true
           echo "✅ Environment ready"
@@ -49,27 +49,33 @@ jobs:
           echo "✅ Container started!"
           docker ps -f name=windows-xp
 
-      - name: 🌐 Setup Ngrok
+      - name: 🌐 Setup Cloudflare Tunnel (No Token)
         run: |
-          echo "📥 Installing ngrok..."
-          wget -q https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
-          tar xzf ngrok-v3-stable-linux-amd64.tgz
-          sudo mv ngrok /usr/local/bin/
+          echo "📥 Installing cloudflared..."
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x cloudflared
+          sudo mv cloudflared /usr/local/bin/
 
-          # HARDCODED TOKEN
-          ngrok config add-authtoken 3BLVtLAew8yyVSC3vKFDo2E4f9Y_4nPhfbQLAbBVrKdqkWCwN
+          echo "🔗 Starting Cloudflare Quick Tunnel..."
+          nohup cloudflared tunnel --url http://localhost:8006 > cf.log 2>&1 &
 
-          echo "🔗 Starting tunnels..."
-          nohup ngrok http 8006 > /dev/null 2>&1 &
-          nohup ngrok tcp 3389 > /dev/null 2>&1 &
-          sleep 8
-          echo "✅ Ngrok ready!"
+          echo "⏳ Waiting for tunnel URL..."
+          for i in {1..15}; do
+            URL=$(grep -o 'https://[-a-z0-9]*\.trycloudflare.com' cf.log | head -1)
+            if [ ! -z "$URL" ]; then
+              echo "✅ Tunnel URL acquired!"
+              echo "$URL" > /tmp/web_url.txt
+              break
+            fi
+            sleep 2
+          done
+
+          echo "🌐 Access URL:"
+          cat /tmp/web_url.txt || echo "❌ Failed to get URL"
 
       - name: ⏳ Wait for Windows to Boot
         run: |
           echo "⏳ Waiting for Windows XP to boot..."
-          echo "This usually takes 2-4 minutes..."
-          echo ""
 
           for i in {1..40}; do
             if docker logs windows-xp 2>&1 | grep -q "Windows started successfully"; then
@@ -78,60 +84,36 @@ jobs:
             fi
 
             if [ $((i % 4)) -eq 0 ]; then
-              echo "[$i/40] Still booting ($(($i * 5)) seconds elapsed)..."
+              echo "[$i/40] Still booting ($(($i * 5)) sec)..."
               docker logs --tail 2 windows-xp 2>&1 | sed 's/^/  > /'
             fi
 
             sleep 5
           done
 
-          echo ""
-          echo "Latest status:"
-          docker logs --tail 5 windows-xp 2>&1
-
-      - name: 🎉 DISPLAY ACCESS URLS
+      - name: 🎉 DISPLAY ACCESS URL
         run: |
           echo ""
           echo "╔════════════════════════════════════════════════╗"
           echo "║                                                ║"
-          echo "║      🖥️  WINDOWS XP ACCESS INFORMATION 🖥️      ║"
+          echo "║      🖥️  WINDOWS XP ACCESS (BROWSER) 🖥️       ║"
           echo "║                                                ║"
           echo "╚════════════════════════════════════════════════╝"
           echo ""
 
-          sleep 2
+          WEB_URL=$(cat /tmp/web_url.txt 2>/dev/null)
 
-          WEB_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[] | select(.proto=="https") | .public_url' | head -1)
-          RDP_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[] | select(.proto=="tcp") | .public_url')
-          RDP_HOST=$(echo $RDP_URL | sed 's/tcp:\/\///')
-
-          echo "🌐 WEB ACCESS (Click to open in browser):"
+          echo "🌐 OPEN THIS LINK:"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
           echo "    $WEB_URL"
           echo ""
-          echo "    Just click the URL above to access Windows XP!"
-          echo ""
-          echo ""
-
-          echo "🖥️  RDP ACCESS (For better performance):"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo ""
-          echo "    Server:   $RDP_HOST"
-          echo "    Username: Administrator"
-          echo "    Password: password123"
-          echo ""
-          echo "    Use any RDP client (Windows: mstsc, Mac: Microsoft Remote Desktop)"
-          echo ""
+          echo "    👆 Click to access Windows XP in browser"
           echo ""
 
-          echo "💾 Container Info:"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          docker ps -f name=windows-xp --format "Name: {{.Names}}\nStatus: {{.Status}}\nUptime: {{.RunningFor}}"
+          echo "💾 Container Status:"
+          docker ps -f name=windows-xp --format "Status: {{.Status}} | Uptime: {{.RunningFor}}"
           echo ""
-
-          echo "$WEB_URL" > /tmp/web_url.txt
-          echo "$RDP_HOST" > /tmp/rdp_host.txt
 
           echo "╔════════════════════════════════════════════════╗"
           echo '║  VM will remain active for ${{ github.event.inputs.vm_runtime }} hours          ║'
@@ -140,50 +122,26 @@ jobs:
 
       - name: 🔍 Keep Alive & Monitor
         run: |
-          echo "🔄 Monitoring started - VM is now accessible!"
-          echo "Press Ctrl+C in GitHub Actions to stop early"
-          echo ""
+          echo "🔄 Monitoring VM..."
 
           RUNTIME_SECONDS=$(($(echo "${{ github.event.inputs.vm_runtime }}" | bc | cut -d. -f1) * 3600))
           END_TIME=$(($(date +%s) + RUNTIME_SECONDS))
-          COUNTER=1
 
           while [ $(date +%s) -lt $END_TIME ]; do
-            REMAINING=$((END_TIME - $(date +%s)))
-            HOURS=$((REMAINING / 3600))
-            MINS=$(((REMAINING % 3600) / 60))
-
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "📊 Update #$COUNTER - $(date '+%H:%M:%S') - Time left: ${HOURS}h ${MINS}m"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "⏱️ Time: $(date '+%H:%M:%S')"
 
             if docker ps -f name=windows-xp --format '{{.Status}}' | grep -q 'Up'; then
-              echo "✅ Container: Running"
+              echo "✅ VM running"
             else
-              echo "❌ Container: Stopped!"
+              echo "❌ VM stopped"
             fi
 
-            docker stats windows-xp --no-stream --format "💻 CPU: {{.CPUPerc}} | RAM: {{.MemUsage}}" 2>/dev/null || echo "📊 Stats unavailable"
-
-            if curl -s http://localhost:4040/api/tunnels | jq -e '.tunnels | length > 0' > /dev/null 2>&1; then
-              echo "🌐 Ngrok: Active"
-            else
-              echo "⚠️  Ngrok: Connection issue"
-            fi
-
-            if [ $((COUNTER % 15)) -eq 0 ]; then
-              echo ""
-              echo "🔗 Access URLs:"
-              echo "   Web: $(cat /tmp/web_url.txt)"
-              echo "   RDP: $(cat /tmp/rdp_host.txt)"
-            fi
-
-            echo ""
-            COUNTER=$((COUNTER + 1))
+            echo "🌐 URL: $(cat /tmp/web_url.txt 2>/dev/null)"
+            echo "----------------------------------------"
             sleep 60
           done
 
-          echo "⏰ Runtime completed! Shutting down..."
+          echo "⏰ Time completed!"
 
       - name: 🛑 Cleanup
         if: always()
@@ -191,5 +149,5 @@ jobs:
           echo "🧹 Cleaning up..."
           docker stop windows-xp 2>/dev/null || true
           docker rm windows-xp 2>/dev/null || true
-          pkill ngrok || true
-          echo "✅ Cleanup complete"
+          pkill cloudflared || true
+          echo "✅ Done"
